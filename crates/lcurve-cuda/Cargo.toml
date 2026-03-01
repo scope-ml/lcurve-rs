@@ -1,0 +1,13 @@
+[package]
+name = "lcurve-cuda"
+version = "0.1.0"
+edition = "2021"
+description = "CUDA GPU acceleration for lcurve flux evaluation"
+build = "build.rs"
+
+[dependencies]
+lcurve = { path = "../lcurve" }
+lcurve-subs = { path = "../subs" }
+lcurve-roche = { path = "../roche" }
+rayon = { workspace = true }
+thiserror = { workspace = true }

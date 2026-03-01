@@ -190,6 +190,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "lcurve-cuda"
+version = "0.1.0"
+dependencies = [
+ "lcurve",
+ "lcurve-roche",
+ "lcurve-subs",
+ "rayon",
+ "thiserror",
+]
+
+[[package]]
 name = "lcurve-roche"
 version = "0.1.0"
 dependencies = [
@@ -203,6 +214,7 @@ name = "lcurve-rs-python"
 version = "0.1.0"
 dependencies = [
  "lcurve",
+ "lcurve-cuda",
  "numpy",
  "pyo3",
 ]
@@ -229,6 +241,7 @@ dependencies = [
  "approx",
  "clap",
  "lcurve",
+ "lcurve-cuda",
  "lcurve-roche",
  "lcurve-subs",
  "rayon",

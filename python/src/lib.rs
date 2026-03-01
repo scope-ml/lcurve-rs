@@ -1,7 +1,56 @@
 use pyo3::prelude::*;
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::types::PyDict;
 use numpy::{PyArray1, IntoPyArray};
+use std::sync::Mutex;
+
+// ---------------------------------------------------------------------------
+// Device selection — global state for GPU/CPU dispatch
+// ---------------------------------------------------------------------------
+
+/// Which compute device to use.
+#[derive(Clone, Debug)]
+enum DeviceChoice {
+    Cpu,
+    Cuda(i32), // device_id
+}
+
+impl DeviceChoice {
+    fn is_gpu(&self) -> bool {
+        matches!(self, DeviceChoice::Cuda(_))
+    }
+
+    fn to_string(&self) -> String {
+        match self {
+            DeviceChoice::Cpu => "cpu".to_string(),
+            DeviceChoice::Cuda(id) => format!("cuda:{}", id),
+        }
+    }
+
+    fn parse(s: &str) -> Result<Self, String> {
+        let s = s.trim().to_lowercase();
+        if s == "cpu" {
+            Ok(DeviceChoice::Cpu)
+        } else if s == "cuda" || s == "gpu" {
+            Ok(DeviceChoice::Cuda(0))
+        } else if let Some(rest) = s.strip_prefix("cuda:") {
+            let id: i32 = rest
+                .parse()
+                .map_err(|_| format!("invalid device id: '{}'", rest))?;
+            if id < 0 {
+                return Err(format!("device id must be >= 0, got {}", id));
+            }
+            Ok(DeviceChoice::Cuda(id))
+        } else {
+            Err(format!(
+                "unknown device '{}': expected 'cpu', 'cuda', or 'cuda:N'",
+                s
+            ))
+        }
+    }
+}
+
+static DEVICE_CHOICE: Mutex<DeviceChoice> = Mutex::new(DeviceChoice::Cpu);
 
 /// Wrapper around lcurve::model::Model exposed to Python.
 #[pyclass]
@@ -504,10 +553,16 @@ impl Model {
         let flat: Vec<f64> = arr.iter().copied().collect();
         let name_refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
 
+        let use_gpu = DEVICE_CHOICE.lock().map_or(false, |d| d.is_gpu());
+
         let result = py.allow_threads(|| {
-            lcurve::orchestration::chisq_batch(
-                &self.inner, &datum_vec, &name_refs, &flat, scale,
-            )
+            if use_gpu {
+                chisq_batch_gpu_dispatch(&self.inner, &datum_vec, &name_refs, &flat, scale)
+            } else {
+                lcurve::orchestration::chisq_batch(
+                    &self.inner, &datum_vec, &name_refs, &flat, scale,
+                )
+            }
         });
 
         debug_assert_eq!(result.len(), nsets);
@@ -524,10 +579,115 @@ impl Model {
     }
 }
 
+// ---------------------------------------------------------------------------
+// GPU dispatch — compiled only when the cuda feature is enabled
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "cuda")]
+fn chisq_batch_gpu_dispatch(
+    base: &lcurve::model::Model,
+    data: &lcurve::types::Data,
+    param_names: &[&str],
+    param_values: &[f64],
+    scale: bool,
+) -> Vec<f64> {
+    use std::sync::OnceLock;
+
+    static GPU_CTX: OnceLock<Mutex<lcurve_cuda::CudaContext>> = OnceLock::new();
+
+    let device_id = DEVICE_CHOICE
+        .lock()
+        .map(|d| match &*d {
+            DeviceChoice::Cuda(id) => *id,
+            _ => 0,
+        })
+        .unwrap_or(0);
+
+    let ctx_mutex = GPU_CTX.get_or_init(|| {
+        Mutex::new(
+            lcurve_cuda::CudaContext::new(device_id)
+                .expect("Failed to initialise CUDA context"),
+        )
+    });
+
+    let mut ctx = match ctx_mutex.lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            return lcurve::orchestration::chisq_batch(base, data, param_names, param_values, scale);
+        }
+    };
+
+    match lcurve_cuda::chisq_batch_gpu(&mut ctx, base, data, param_names, param_values, scale) {
+        Ok(results) => results,
+        Err(_) => {
+            // Graceful fallback to CPU
+            lcurve::orchestration::chisq_batch(base, data, param_names, param_values, scale)
+        }
+    }
+}
+
+#[cfg(not(feature = "cuda"))]
+fn chisq_batch_gpu_dispatch(
+    base: &lcurve::model::Model,
+    data: &lcurve::types::Data,
+    param_names: &[&str],
+    param_values: &[f64],
+    scale: bool,
+) -> Vec<f64> {
+    // Should not be reached — device check prevents this — but fall back gracefully
+    lcurve::orchestration::chisq_batch(base, data, param_names, param_values, scale)
+}
+
+// ---------------------------------------------------------------------------
+// Module-level device functions
+// ---------------------------------------------------------------------------
+
+/// Set the compute device: "cpu", "cuda", or "cuda:N".
+#[pyfunction]
+fn _set_device(device: &str) -> PyResult<()> {
+    let choice = DeviceChoice::parse(device)
+        .map_err(|e| PyValueError::new_err(e))?;
+
+    // If requesting CUDA, check that the feature is compiled in
+    if choice.is_gpu() {
+        #[cfg(not(feature = "cuda"))]
+        {
+            return Err(PyRuntimeError::new_err(
+                "lcurve_rs was built without CUDA support. \
+                 Rebuild with: maturin develop --release --features cuda"
+            ));
+        }
+    }
+
+    let mut guard = DEVICE_CHOICE
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("device lock poisoned"))?;
+    *guard = choice;
+    Ok(())
+}
+
+/// Return current device string: "cpu" or "cuda:N".
+#[pyfunction]
+fn _get_device() -> PyResult<String> {
+    let guard = DEVICE_CHOICE
+        .lock()
+        .map_err(|_| PyRuntimeError::new_err("device lock poisoned"))?;
+    Ok(guard.to_string())
+}
+
+/// Return True if the CUDA feature is compiled in.
+#[pyfunction]
+fn _has_cuda() -> bool {
+    cfg!(feature = "cuda")
+}
+
 /// lcurve_rs — Python bindings for the Rust lcurve light curve engine.
 #[pymodule]
 fn _lcurve_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Model>()?;
     m.add_class::<LcResult>()?;
+    m.add_function(wrap_pyfunction!(_set_device, m)?)?;
+    m.add_function(wrap_pyfunction!(_get_device, m)?)?;
+    m.add_function(wrap_pyfunction!(_has_cuda, m)?)?;
     Ok(())
 }
