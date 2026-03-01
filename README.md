@@ -17,6 +17,7 @@ Includes a drop-in CLI replacement (`lroche`) and Python bindings (`lcurve_rs`).
 | Gravitational lensing | Optional lensing magnification from the primary |
 | Parallel computation | Rayon-based multithreading across time points and grid elements |
 | Python bindings | PyO3/maturin bindings with numpy integration |
+| Parameter estimation | Fitting via emcee (MCMC), UltraNest, or dynesty (nested sampling) |
 
 ## Installing
 
@@ -106,6 +107,40 @@ print(model.get_param("t1"))  # 20000.0
 Direct attribute access for common parameters: `q`, `iangle`, `r1`, `r2`, `t1`, `t2`, `period`, `t0`, `velocity_scale`.
 
 All 65 physical parameters are accessible via `model.get_param(name)` / `model.set_param(name, value)`.
+
+Full Pparam metadata (value, range, dstep, vary, defined) is available via `model.get_pparam(name)` and `model.set_pparam(name, ...)`.
+
+## Parameter Estimation
+
+Fit model parameters to observed data using MCMC or nested sampling. Install optional backends:
+
+```bash
+pip install lcurve_rs[emcee]      # MCMC
+pip install lcurve_rs[ultranest]  # nested sampling
+pip install lcurve_rs[all]        # all backends
+```
+
+```python
+from lcurve_rs.fitting import Fitter, Prior
+
+model = lcurve_rs.Model("model.dat")
+
+# Mark parameters as free
+model.set_pparam("q", vary=True, range=0.1)
+model.set_pparam("iangle", vary=True, range=5.0)
+
+# Optional: override a prior
+priors = {"iangle": Prior.gaussian("iangle", mean=82.0, sigma=1.5, low=70, high=90)}
+
+# Fit
+fitter = Fitter(model, data="observed.dat", scale=True, priors=priors)
+result = fitter.run_emcee(nwalkers=32, nsteps=5000, burn=1000, progress=True)
+
+print(result.summary())   # median + credible intervals
+print(result.best_fit)    # max-likelihood parameters
+```
+
+UltraNest and dynesty are also supported — see the [fitting guide](docs/getting-started/fitting.md) for details.
 
 ## Performance
 

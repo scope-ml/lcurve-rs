@@ -9,5 +9,11 @@ description = "Python bindings for lcurve_rs — a fast Rust light curve engine 
 requires-python = ">=3.9"
 dependencies = ["numpy"]
 
+[project.optional-dependencies]
+ultranest = ["ultranest"]
+dynesty = ["dynesty"]
+emcee = ["emcee"]
+all = ["ultranest", "dynesty", "emcee"]
+
 [tool.maturin]
 module-name = "lcurve_rs._lcurve_rs"

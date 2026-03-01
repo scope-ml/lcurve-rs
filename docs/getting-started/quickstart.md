@@ -89,3 +89,21 @@ plt.ylabel("Flux")
 plt.title(f"q={model.q}, i={model.iangle}")
 plt.show()
 ```
+
+### Parameter estimation
+
+Fit model parameters to observed data using MCMC or nested sampling.
+See the [Parameter Estimation](fitting.md) guide for full details.
+
+```python
+from lcurve_rs.fitting import Fitter
+
+# Mark parameters as free
+model.set_pparam("q", vary=True, range=0.1)
+model.set_pparam("iangle", vary=True, range=5.0)
+
+# Fit with emcee
+fitter = Fitter(model, data="observed.dat", scale=True)
+result = fitter.run_emcee(nwalkers=32, nsteps=5000, burn=1000, progress=True)
+print(result.summary())
+```

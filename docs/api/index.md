@@ -67,6 +67,41 @@ class Model:
     def set_param(self, name: str, value: float) -> None:
         """Set value of a named physical parameter."""
 
+    def get_pparam(self, name: str) -> dict:
+        """Return full Pparam metadata for a named parameter.
+
+        Returns
+        -------
+        dict
+            Keys: "value", "range", "dstep", "vary", "defined".
+        """
+
+    def set_pparam(
+        self,
+        name: str,
+        *,
+        value: float | None = None,
+        range: float | None = None,
+        dstep: float | None = None,
+        vary: bool | None = None,
+    ) -> None:
+        """Selectively update Pparam field(s) for a named parameter."""
+
+    def get_free_params(self) -> list[dict]:
+        """Return metadata for all free (vary=True) parameters.
+
+        Returns
+        -------
+        list[dict]
+            Each dict has keys: "name", "value", "range", "dstep".
+        """
+
+    def set_params(self, names: list[str], values: list[float]) -> None:
+        """Batch-set multiple parameter values in one Rust call."""
+
+    def copy(self) -> "Model":
+        """Deep copy of this model."""
+
     # Properties: q, iangle, r1, r2, t1, t2, period, t0, velocity_scale
 ```
 
@@ -141,6 +176,82 @@ All 65 physical parameters from the lcurve model file are accessible via `get_pa
 | `absorb` | Irradiation absorption efficiency |
 | `third` | Third-light contribution |
 | `slope`, `quad`, `cube` | Polynomial fudge factors |
+
+## Fitting API (`lcurve_rs.fitting`)
+
+### `lcurve_rs.fitting.Prior`
+
+```python
+@dataclass
+class Prior:
+    name: str
+    low: float
+    high: float
+    transform: Callable | None   # unit cube [0,1] -> param (nested sampling)
+    log_prob: Callable | None    # log-probability (MCMC)
+
+    @staticmethod
+    def uniform(name: str, low: float, high: float) -> Prior: ...
+
+    @staticmethod
+    def gaussian(name: str, mean: float, sigma: float,
+                 low: float, high: float) -> Prior: ...
+```
+
+### `lcurve_rs.fitting.FitResult`
+
+```python
+@dataclass
+class FitResult:
+    backend: str                     # "ultranest", "dynesty", or "emcee"
+    param_names: list[str]
+    samples: np.ndarray              # (n_samples, n_params)
+    log_likelihood: np.ndarray       # (n_samples,)
+    weights: np.ndarray | None       # nested sampling only
+    log_evidence: float | None       # nested sampling only
+    log_evidence_err: float | None
+    raw_result: Any                  # backend-specific object
+
+    @property
+    def median(self) -> dict[str, float]: ...
+    @property
+    def best_fit(self) -> dict[str, float]: ...
+    def summary(self, ci: float = 68.27) -> str: ...
+```
+
+### `lcurve_rs.fitting.Fitter`
+
+```python
+class Fitter:
+    def __init__(
+        self,
+        model: Model,
+        data: str,
+        scale: bool = True,
+        priors: dict[str, Prior] | None = None,
+        params: list[str] | None = None,
+    ) -> None: ...
+
+    param_names: list[str]
+    ndim: int
+
+    def log_likelihood(self, theta) -> float: ...
+    def prior_transform(self, cube) -> np.ndarray: ...
+    def log_prior(self, theta) -> float: ...
+    def log_probability(self, theta) -> float: ...
+
+    def run_emcee(
+        self,
+        nwalkers: int = 0,
+        nsteps: int = 5000,
+        burn: int = 1000,
+        **kwargs,
+    ) -> FitResult: ...
+
+    def run_ultranest(self, **kwargs) -> FitResult: ...
+
+    def run_dynesty(self, nlive: int = 500, **kwargs) -> FitResult: ...
+```
 
 ## CLI Reference
 

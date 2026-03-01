@@ -14,6 +14,7 @@ Example
 """
 
 from lcurve_rs._lcurve_rs import Model, LcResult
+from lcurve_rs.fitting import Fitter, Prior, FitResult
 
-__all__ = ["Model", "LcResult"]
+__all__ = ["Model", "LcResult", "Fitter", "Prior", "FitResult"]
 __version__ = "0.1.0"

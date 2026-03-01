@@ -37,6 +37,7 @@ nav:
   - Getting Started:
     - Installation: getting-started/installation.md
     - Quick Start: getting-started/quickstart.md
+    - Parameter Estimation: getting-started/fitting.md
   - API Reference:
     - Overview: api/index.md
 

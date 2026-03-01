@@ -1,5 +1,6 @@
 use pyo3::prelude::*;
 use pyo3::exceptions::PyValueError;
+use pyo3::types::PyDict;
 use numpy::{PyArray1, IntoPyArray};
 
 /// Wrapper around lcurve::model::Model exposed to Python.
@@ -66,101 +67,140 @@ impl LcResult {
 }
 
 // ---------------------------------------------------------------------------
-// Helper: map parameter name string to a mutable reference on Model
+// Central macro listing all (name_str, field_ident) Pparam fields of Model.
+// Every helper that needs to iterate or match on parameter names builds on
+// this single source of truth.
 // ---------------------------------------------------------------------------
 
-macro_rules! pparam_match {
-    ($model:expr, $name:expr, $( $key:literal => $field:ident ),+ $(,)?) => {
-        match $name {
-            $( $key => Some(&mut $model.$field), )+
-            _ => None,
+macro_rules! for_all_pparams {
+    ($macro_name:ident) => {
+        $macro_name! {
+            "q" => q,
+            "iangle" => iangle,
+            "r1" => r1,
+            "r2" => r2,
+            "cphi3" => cphi3,
+            "cphi4" => cphi4,
+            "spin1" => spin1,
+            "spin2" => spin2,
+            "t1" => t1,
+            "t2" => t2,
+            "ldc1_1" => ldc1_1,
+            "ldc1_2" => ldc1_2,
+            "ldc1_3" => ldc1_3,
+            "ldc1_4" => ldc1_4,
+            "ldc2_1" => ldc2_1,
+            "ldc2_2" => ldc2_2,
+            "ldc2_3" => ldc2_3,
+            "ldc2_4" => ldc2_4,
+            "velocity_scale" => velocity_scale,
+            "beam_factor1" => beam_factor1,
+            "beam_factor2" => beam_factor2,
+            "t0" => t0,
+            "period" => period,
+            "pdot" => pdot,
+            "deltat" => deltat,
+            "gravity_dark1" => gravity_dark1,
+            "gravity_dark2" => gravity_dark2,
+            "absorb" => absorb,
+            "slope" => slope,
+            "quad" => quad,
+            "cube" => cube,
+            "third" => third,
+            "rdisc1" => rdisc1,
+            "rdisc2" => rdisc2,
+            "height_disc" => height_disc,
+            "beta_disc" => beta_disc,
+            "temp_disc" => temp_disc,
+            "texp_disc" => texp_disc,
+            "lin_limb_disc" => lin_limb_disc,
+            "quad_limb_disc" => quad_limb_disc,
+            "temp_edge" => temp_edge,
+            "absorb_edge" => absorb_edge,
+            "radius_spot" => radius_spot,
+            "length_spot" => length_spot,
+            "height_spot" => height_spot,
+            "expon_spot" => expon_spot,
+            "epow_spot" => epow_spot,
+            "angle_spot" => angle_spot,
+            "yaw_spot" => yaw_spot,
+            "temp_spot" => temp_spot,
+            "tilt_spot" => tilt_spot,
+            "cfrac_spot" => cfrac_spot,
+            "stsp11_long" => stsp11_long,
+            "stsp11_lat" => stsp11_lat,
+            "stsp11_fwhm" => stsp11_fwhm,
+            "stsp11_tcen" => stsp11_tcen,
+            "stsp12_long" => stsp12_long,
+            "stsp12_lat" => stsp12_lat,
+            "stsp12_fwhm" => stsp12_fwhm,
+            "stsp12_tcen" => stsp12_tcen,
+            "stsp13_long" => stsp13_long,
+            "stsp13_lat" => stsp13_lat,
+            "stsp13_fwhm" => stsp13_fwhm,
+            "stsp13_tcen" => stsp13_tcen,
+            "stsp21_long" => stsp21_long,
+            "stsp21_lat" => stsp21_lat,
+            "stsp21_fwhm" => stsp21_fwhm,
+            "stsp21_tcen" => stsp21_tcen,
+            "stsp22_long" => stsp22_long,
+            "stsp22_lat" => stsp22_lat,
+            "stsp22_fwhm" => stsp22_fwhm,
+            "stsp22_tcen" => stsp22_tcen,
+            "uesp_long1" => uesp_long1,
+            "uesp_long2" => uesp_long2,
+            "uesp_lathw" => uesp_lathw,
+            "uesp_taper" => uesp_taper,
+            "uesp_temp" => uesp_temp,
         }
     };
 }
+
+// Derived helpers built on for_all_pparams!
 
 fn get_pparam_mut<'a>(
     model: &'a mut lcurve::model::Model,
     name: &str,
 ) -> Option<&'a mut lcurve::model::Pparam> {
-    pparam_match!(model, name,
-        "q" => q, "iangle" => iangle, "r1" => r1, "r2" => r2,
-        "cphi3" => cphi3, "cphi4" => cphi4, "spin1" => spin1, "spin2" => spin2,
-        "t1" => t1, "t2" => t2,
-        "ldc1_1" => ldc1_1, "ldc1_2" => ldc1_2, "ldc1_3" => ldc1_3, "ldc1_4" => ldc1_4,
-        "ldc2_1" => ldc2_1, "ldc2_2" => ldc2_2, "ldc2_3" => ldc2_3, "ldc2_4" => ldc2_4,
-        "velocity_scale" => velocity_scale, "beam_factor1" => beam_factor1, "beam_factor2" => beam_factor2,
-        "t0" => t0, "period" => period, "pdot" => pdot, "deltat" => deltat,
-        "gravity_dark1" => gravity_dark1, "gravity_dark2" => gravity_dark2,
-        "absorb" => absorb, "slope" => slope, "quad" => quad, "cube" => cube, "third" => third,
-        "rdisc1" => rdisc1, "rdisc2" => rdisc2, "height_disc" => height_disc,
-        "beta_disc" => beta_disc, "temp_disc" => temp_disc, "texp_disc" => texp_disc,
-        "lin_limb_disc" => lin_limb_disc, "quad_limb_disc" => quad_limb_disc,
-        "temp_edge" => temp_edge, "absorb_edge" => absorb_edge,
-        "radius_spot" => radius_spot, "length_spot" => length_spot,
-        "height_spot" => height_spot, "expon_spot" => expon_spot,
-        "epow_spot" => epow_spot, "angle_spot" => angle_spot,
-        "yaw_spot" => yaw_spot, "temp_spot" => temp_spot,
-        "tilt_spot" => tilt_spot, "cfrac_spot" => cfrac_spot,
-        "stsp11_long" => stsp11_long, "stsp11_lat" => stsp11_lat,
-        "stsp11_fwhm" => stsp11_fwhm, "stsp11_tcen" => stsp11_tcen,
-        "stsp12_long" => stsp12_long, "stsp12_lat" => stsp12_lat,
-        "stsp12_fwhm" => stsp12_fwhm, "stsp12_tcen" => stsp12_tcen,
-        "stsp13_long" => stsp13_long, "stsp13_lat" => stsp13_lat,
-        "stsp13_fwhm" => stsp13_fwhm, "stsp13_tcen" => stsp13_tcen,
-        "stsp21_long" => stsp21_long, "stsp21_lat" => stsp21_lat,
-        "stsp21_fwhm" => stsp21_fwhm, "stsp21_tcen" => stsp21_tcen,
-        "stsp22_long" => stsp22_long, "stsp22_lat" => stsp22_lat,
-        "stsp22_fwhm" => stsp22_fwhm, "stsp22_tcen" => stsp22_tcen,
-        "uesp_long1" => uesp_long1, "uesp_long2" => uesp_long2,
-        "uesp_lathw" => uesp_lathw, "uesp_taper" => uesp_taper, "uesp_temp" => uesp_temp,
-    )
-}
-
-macro_rules! pparam_match_ref {
-    ($model:expr, $name:expr, $( $key:literal => $field:ident ),+ $(,)?) => {
-        match $name {
-            $( $key => Some(& $model.$field), )+
-            _ => None,
-        }
-    };
+    macro_rules! do_match_mut {
+        ($( $key:literal => $field:ident ),+ $(,)?) => {
+            match name {
+                $( $key => Some(&mut model.$field), )+
+                _ => None,
+            }
+        };
+    }
+    for_all_pparams!(do_match_mut)
 }
 
 fn get_pparam_ref<'a>(
     model: &'a lcurve::model::Model,
     name: &str,
 ) -> Option<&'a lcurve::model::Pparam> {
-    pparam_match_ref!(model, name,
-        "q" => q, "iangle" => iangle, "r1" => r1, "r2" => r2,
-        "cphi3" => cphi3, "cphi4" => cphi4, "spin1" => spin1, "spin2" => spin2,
-        "t1" => t1, "t2" => t2,
-        "ldc1_1" => ldc1_1, "ldc1_2" => ldc1_2, "ldc1_3" => ldc1_3, "ldc1_4" => ldc1_4,
-        "ldc2_1" => ldc2_1, "ldc2_2" => ldc2_2, "ldc2_3" => ldc2_3, "ldc2_4" => ldc2_4,
-        "velocity_scale" => velocity_scale, "beam_factor1" => beam_factor1, "beam_factor2" => beam_factor2,
-        "t0" => t0, "period" => period, "pdot" => pdot, "deltat" => deltat,
-        "gravity_dark1" => gravity_dark1, "gravity_dark2" => gravity_dark2,
-        "absorb" => absorb, "slope" => slope, "quad" => quad, "cube" => cube, "third" => third,
-        "rdisc1" => rdisc1, "rdisc2" => rdisc2, "height_disc" => height_disc,
-        "beta_disc" => beta_disc, "temp_disc" => temp_disc, "texp_disc" => texp_disc,
-        "lin_limb_disc" => lin_limb_disc, "quad_limb_disc" => quad_limb_disc,
-        "temp_edge" => temp_edge, "absorb_edge" => absorb_edge,
-        "radius_spot" => radius_spot, "length_spot" => length_spot,
-        "height_spot" => height_spot, "expon_spot" => expon_spot,
-        "epow_spot" => epow_spot, "angle_spot" => angle_spot,
-        "yaw_spot" => yaw_spot, "temp_spot" => temp_spot,
-        "tilt_spot" => tilt_spot, "cfrac_spot" => cfrac_spot,
-        "stsp11_long" => stsp11_long, "stsp11_lat" => stsp11_lat,
-        "stsp11_fwhm" => stsp11_fwhm, "stsp11_tcen" => stsp11_tcen,
-        "stsp12_long" => stsp12_long, "stsp12_lat" => stsp12_lat,
-        "stsp12_fwhm" => stsp12_fwhm, "stsp12_tcen" => stsp12_tcen,
-        "stsp13_long" => stsp13_long, "stsp13_lat" => stsp13_lat,
-        "stsp13_fwhm" => stsp13_fwhm, "stsp13_tcen" => stsp13_tcen,
-        "stsp21_long" => stsp21_long, "stsp21_lat" => stsp21_lat,
-        "stsp21_fwhm" => stsp21_fwhm, "stsp21_tcen" => stsp21_tcen,
-        "stsp22_long" => stsp22_long, "stsp22_lat" => stsp22_lat,
-        "stsp22_fwhm" => stsp22_fwhm, "stsp22_tcen" => stsp22_tcen,
-        "uesp_long1" => uesp_long1, "uesp_long2" => uesp_long2,
-        "uesp_lathw" => uesp_lathw, "uesp_taper" => uesp_taper, "uesp_temp" => uesp_temp,
-    )
+    macro_rules! do_match_ref {
+        ($( $key:literal => $field:ident ),+ $(,)?) => {
+            match name {
+                $( $key => Some(&model.$field), )+
+                _ => None,
+            }
+        };
+    }
+    for_all_pparams!(do_match_ref)
+}
+
+fn collect_free_params(model: &lcurve::model::Model) -> Vec<(&'static str, &lcurve::model::Pparam)> {
+    let mut out = Vec::new();
+    macro_rules! do_collect {
+        ($( $key:literal => $field:ident ),+ $(,)?) => {
+            $(
+                if model.$field.vary && model.$field.defined {
+                    out.push(($key, &model.$field));
+                }
+            )+
+        };
+    }
+    for_all_pparams!(do_collect);
+    out
 }
 
 #[pymethods]
@@ -206,6 +246,108 @@ impl Model {
         get_pparam_mut(&mut self.inner, name)
             .map(|p| { p.value = value; })
             .ok_or_else(|| PyValueError::new_err(format!("unknown parameter: '{}'", name)))
+    }
+
+    /// Return the full Pparam metadata for a named parameter.
+    ///
+    /// Parameters
+    /// ----------
+    /// name : str
+    ///     Parameter name.
+    ///
+    /// Returns
+    /// -------
+    /// dict
+    ///     Keys: ``"value"``, ``"range"``, ``"dstep"``, ``"vary"``, ``"defined"``.
+    fn get_pparam<'py>(&self, py: Python<'py>, name: &str) -> PyResult<Bound<'py, PyDict>> {
+        let p = get_pparam_ref(&self.inner, name)
+            .ok_or_else(|| PyValueError::new_err(format!("unknown parameter: '{}'", name)))?;
+        let d = PyDict::new(py);
+        d.set_item("value", p.value)?;
+        d.set_item("range", p.range)?;
+        d.set_item("dstep", p.dstep)?;
+        d.set_item("vary", p.vary)?;
+        d.set_item("defined", p.defined)?;
+        Ok(d)
+    }
+
+    /// Selectively update Pparam field(s) for a named parameter.
+    ///
+    /// Parameters
+    /// ----------
+    /// name : str
+    ///     Parameter name.
+    /// value : float, optional
+    /// range : float, optional
+    /// dstep : float, optional
+    /// vary : bool, optional
+    #[pyo3(signature = (name, *, value=None, range=None, dstep=None, vary=None))]
+    fn set_pparam(
+        &mut self,
+        name: &str,
+        value: Option<f64>,
+        range: Option<f64>,
+        dstep: Option<f64>,
+        vary: Option<bool>,
+    ) -> PyResult<()> {
+        let p = get_pparam_mut(&mut self.inner, name)
+            .ok_or_else(|| PyValueError::new_err(format!("unknown parameter: '{}'", name)))?;
+        if let Some(v) = value { p.value = v; }
+        if let Some(r) = range { p.range = r; }
+        if let Some(d) = dstep { p.dstep = d; }
+        if let Some(v) = vary { p.vary = v; }
+        Ok(())
+    }
+
+    /// Return metadata for all free (vary=True, defined=True) parameters.
+    ///
+    /// Returns
+    /// -------
+    /// list[dict]
+    ///     Each dict has keys ``"name"``, ``"value"``, ``"range"``, ``"dstep"``.
+    fn get_free_params<'py>(&self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyDict>>> {
+        let free = collect_free_params(&self.inner);
+        let mut out = Vec::with_capacity(free.len());
+        for (name, p) in free {
+            let d = PyDict::new(py);
+            d.set_item("name", name)?;
+            d.set_item("value", p.value)?;
+            d.set_item("range", p.range)?;
+            d.set_item("dstep", p.dstep)?;
+            out.push(d);
+        }
+        Ok(out)
+    }
+
+    /// Batch-set multiple parameter values in one call.
+    ///
+    /// Parameters
+    /// ----------
+    /// names : list[str]
+    ///     Parameter names.
+    /// values : list[float]
+    ///     Corresponding values.
+    fn set_params(&mut self, names: Vec<String>, values: Vec<f64>) -> PyResult<()> {
+        if names.len() != values.len() {
+            return Err(PyValueError::new_err(
+                format!("names and values must have same length ({} vs {})", names.len(), values.len())
+            ));
+        }
+        for (name, val) in names.iter().zip(values.iter()) {
+            get_pparam_mut(&mut self.inner, name)
+                .map(|p| { p.value = *val; })
+                .ok_or_else(|| PyValueError::new_err(format!("unknown parameter: '{}'", name)))?;
+        }
+        Ok(())
+    }
+
+    /// Deep copy of this model.
+    ///
+    /// Returns
+    /// -------
+    /// Model
+    fn copy(&self) -> Self {
+        Model { inner: self.inner.clone() }
     }
 
     // ---- Convenience properties for the most common parameters ----
