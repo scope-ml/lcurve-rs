@@ -13,7 +13,8 @@ dependencies = ["numpy"]
 ultranest = ["ultranest"]
 dynesty = ["dynesty"]
 emcee = ["emcee"]
-all = ["ultranest", "dynesty", "emcee"]
+eryn = ["eryn"]
+all = ["ultranest", "dynesty", "emcee", "eryn"]
 
 [tool.maturin]
 module-name = "lcurve_rs._lcurve_rs"

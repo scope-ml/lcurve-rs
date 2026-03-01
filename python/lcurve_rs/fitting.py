@@ -98,7 +98,7 @@ class FitResult:
     Attributes
     ----------
     backend : str
-        ``"ultranest"``, ``"dynesty"``, or ``"emcee"``.
+        ``"ultranest"``, ``"dynesty"``, ``"emcee"``, or ``"eryn"``.
     param_names : list[str]
         Ordered parameter names.
     samples : np.ndarray
@@ -183,6 +183,39 @@ class FitResult:
                 hi = float(np.percentile(col, hi_q))
             lines.append(f"{name:>20s}  {med:12.6g}  {lo:12.6g}  {hi:12.6g}")
         return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Eryn prior adapter
+# ---------------------------------------------------------------------------
+
+class _ErynPriorAdapter:
+    """Bridge an lcurve :class:`Prior` to the eryn distribution interface.
+
+    Eryn's :class:`ProbDistContainer` expects distributions with
+    ``logpdf(x)`` and ``rvs(size)`` methods that accept array inputs.
+    It also sets ``use_cupy`` and ``return_gpu`` attributes on each
+    distribution during ``__init__``.
+    """
+
+    def __init__(self, prior: Prior):
+        self._prior = prior
+        self.use_cupy = False
+        self.return_gpu = False
+
+    def logpdf(self, x):
+        x = np.asarray(x, dtype=np.float64)
+        flat = x.ravel()
+        out = np.array([self._prior.log_prob(float(v)) for v in flat])
+        return out.reshape(x.shape)
+
+    def rvs(self, size=1):
+        if isinstance(size, int):
+            size = (size,)
+        u = np.random.uniform(0.0, 1.0, size)
+        flat = u.ravel()
+        out = np.array([self._prior.transform(float(v)) for v in flat])
+        return out.reshape(size)
 
 
 # ---------------------------------------------------------------------------
@@ -410,6 +443,94 @@ class Fitter:
             log_evidence=float(raw.logz[-1]),
             log_evidence_err=float(raw.logzerr[-1]),
             raw_result=raw,
+        )
+
+    def run_eryn(
+        self,
+        nwalkers: int = 0,
+        nsteps: int = 5000,
+        burn: int = 1000,
+        ntemps: int = 1,
+        vectorize: bool = True,
+        thin_by: int = 1,
+        **kwargs,
+    ) -> FitResult:
+        """Run eryn parallel-tempered MCMC.
+
+        Parameters
+        ----------
+        nwalkers : int
+            Number of walkers (default: ``max(32, 2*ndim + 2)``).
+        nsteps : int
+            Total MCMC steps after burn-in (default 5000).
+        burn : int
+            Burn-in steps to discard (default 1000).
+        ntemps : int
+            Number of temperatures for parallel tempering (default 1).
+        vectorize : bool
+            Use batch evaluation across walkers (default True).
+        thin_by : int
+            Thinning factor for stored chain (default 1).
+
+        All other keyword arguments are forwarded to
+        ``eryn.ensemble.EnsembleSampler``.
+
+        Returns
+        -------
+        FitResult
+        """
+        from eryn.ensemble import EnsembleSampler
+        from eryn.prior import ProbDistContainer
+
+        if nwalkers <= 0:
+            nwalkers = max(32, 2 * self.ndim + 2)
+
+        # Build eryn prior container from lcurve Prior objects
+        eryn_priors = ProbDistContainer(
+            {i: _ErynPriorAdapter(p) for i, p in enumerate(self.priors)}
+        )
+
+        # Likelihood: eryn handles priors internally, so pass only likelihood
+        if vectorize:
+            log_fn = self.log_likelihood_batch
+        else:
+            log_fn = self.log_likelihood
+
+        # Tempering
+        tempering_kwargs = kwargs.pop("tempering_kwargs", {})
+        if ntemps > 1:
+            tempering_kwargs.setdefault("ntemps", ntemps)
+
+        # Initial coordinates: shape (ntemps, nwalkers, 1, ndim)
+        actual_ntemps = tempering_kwargs.get("ntemps", ntemps) if ntemps > 1 else 1
+        coords = eryn_priors.rvs(size=(actual_ntemps, nwalkers, 1))
+
+        sampler = EnsembleSampler(
+            nwalkers,
+            self.ndim,
+            log_fn,
+            eryn_priors,
+            tempering_kwargs=tempering_kwargs,
+            vectorize=vectorize,
+            **kwargs,
+        )
+        sampler.run_mcmc(coords, nsteps, burn=burn, progress=True, thin_by=thin_by)
+
+        # Extract cold-chain results (temp_index=0)
+        chain = sampler.get_chain(temp_index=0)["model_0"]
+        # shape: (nsteps, nwalkers, 1, ndim) -> flatten
+        chain = chain.reshape(-1, self.ndim)
+
+        logl = sampler.get_log_like(temp_index=0)
+        # shape: (nsteps, nwalkers) -> flatten
+        logl = logl.reshape(-1)
+
+        return FitResult(
+            backend="eryn",
+            param_names=list(self.param_names),
+            samples=chain,
+            log_likelihood=logl,
+            raw_result=sampler,
         )
 
     def run_emcee(
