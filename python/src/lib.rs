@@ -1237,31 +1237,65 @@ fn fit_ell<'py>(
         chi2_ell += resid * resid;
     }
 
-    // --- Cosine model: m = c0 + b*cos(2φ) ---
-    // 2 parameters: c0, b
-    let mut xtwx2 = [[0.0f64; 2]; 2];
-    let mut xtwy2 = [0.0f64; 2];
+    // --- Sinusoidal model: m = c0 + b1*cos(φ) + b2*sin(φ)  (Rowan+ 2021) ---
+    // 3 parameters: c0, b1, b2  (fundamental frequency with free phase)
+    let mut xtwx2 = [[0.0f64; 3]; 3];
+    let mut xtwy2 = [0.0f64; 3];
 
     for i in 0..n {
         let w = 1.0 / (err[i] * err[i]);
-        let cos2 = (2.0 * pi2 * ph[i]).cos();
-        let basis = [1.0, cos2];
-        for r in 0..2 {
-            for c in 0..2 {
+        let angle = pi2 * ph[i];
+        let basis = [1.0, angle.cos(), angle.sin()];
+        for r in 0..3 {
+            for c in 0..3 {
                 xtwx2[r][c] += w * basis[r] * basis[c];
             }
             xtwy2[r] += w * basis[r] * mag[i];
         }
     }
 
-    let det = xtwx2[0][0] * xtwx2[1][1] - xtwx2[0][1] * xtwx2[1][0];
-    let c0_cos = (xtwy2[0] * xtwx2[1][1] - xtwy2[1] * xtwx2[0][1]) / det;
-    let b_cos = (xtwy2[1] * xtwx2[0][0] - xtwy2[0] * xtwx2[1][0]) / det;
+    // Solve 3x3 via Gaussian elimination
+    let mut aug2 = [[0.0f64; 4]; 3];
+    for r in 0..3 {
+        for c in 0..3 {
+            aug2[r][c] = xtwx2[r][c];
+        }
+        aug2[r][3] = xtwy2[r];
+    }
+    for col in 0..3 {
+        let mut max_row = col;
+        let mut max_val = aug2[col][col].abs();
+        for row in (col + 1)..3 {
+            if aug2[row][col].abs() > max_val {
+                max_val = aug2[row][col].abs();
+                max_row = row;
+            }
+        }
+        aug2.swap(col, max_row);
+        let pivot = aug2[col][col];
+        if pivot.abs() < 1e-30 {
+            return Err(PyRuntimeError::new_err("Singular matrix in cosine fit"));
+        }
+        for c in col..4 {
+            aug2[col][c] /= pivot;
+        }
+        for row in 0..3 {
+            if row == col { continue; }
+            let factor = aug2[row][col];
+            for c in col..4 {
+                aug2[row][c] -= factor * aug2[col][c];
+            }
+        }
+    }
+    let c0_cos = aug2[0][3];
+    let b1_cos = aug2[1][3];
+    let b2_cos = aug2[2][3];
 
     let mut chi2_cos = 0.0;
     let mut cos_model = Vec::with_capacity(n);
     for i in 0..n {
-        let pred = c0_cos + b_cos * (2.0 * pi2 * ph[i]).cos();
+        let angle = pi2 * ph[i];
+        let pred = c0_cos + b1_cos * angle.cos() + b2_cos * angle.sin();
         cos_model.push(pred);
         let resid = (mag[i] - pred) / err[i];
         chi2_cos += resid * resid;
@@ -1278,7 +1312,8 @@ fn fit_ell<'py>(
     dict.set_item("a2", a2)?;
     dict.set_item("a3", a3)?;
     dict.set_item("c0_ell", c0_ell)?;
-    dict.set_item("b_cos", b_cos)?;
+    dict.set_item("b1_cos", b1_cos)?;
+    dict.set_item("b2_cos", b2_cos)?;
     dict.set_item("chi2_ell", chi2_ell)?;
     dict.set_item("chi2_cos", chi2_cos)?;
     dict.set_item("R", r_ratio)?;
